@@ -60,9 +60,19 @@ class ChatRequest(BaseModel):
     history: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ChatMessageRequest(BaseModel):
+    message: str
+    merge_id: str
+    session_id: str = "default"
+
+
 class ReportRequest(BaseModel):
     topic: str = Field(default="多教材知识整合报告")
     textbook_ids: list[str] = Field(default_factory=list)
+
+
+class ReportGenerateRequest(BaseModel):
+    merge_id: str
 
 
 class LLMConfigRequest(BaseModel):
@@ -315,14 +325,39 @@ def rag_query(request: RagRequest) -> dict[str, Any]:
     return rag.query_rag(request.query, request.top_k)
 
 
+@app.post("/api/chat/message")
+def chat_with_teacher_api(request: ChatMessageRequest) -> dict[str, Any]:
+    """教师对话"""
+    return chat.chat_with_teacher(request.message, request.merge_id, request.session_id)
+
+
+@app.get("/api/chat/history/{session_id}")
+def get_chat_history_api(session_id: str) -> dict[str, Any]:
+    """获取对话历史"""
+    history = chat.get_chat_history(session_id)
+    return {"session_id": session_id, "history": history}
+
+
 @app.post("/chat")
 def chat_with_agent(request: ChatRequest) -> dict[str, Any]:
     return chat.reply(request.message, request.history)
 
 
+@app.post("/api/report/generate")
+def generate_report_api(request: ReportGenerateRequest) -> dict[str, Any]:
+    """生成整合报告"""
+    return report.generate_report(request.merge_id)
+
+
+@app.get("/api/report")
+def get_report_api() -> dict[str, Any]:
+    """读取已生成的报告"""
+    return report.get_report()
+
+
 @app.post("/report")
-def generate_report(request: ReportRequest) -> dict[str, Any]:
-    return report.generate_report(request.topic, request.textbook_ids)
+def generate_report_legacy(request: ReportRequest) -> dict[str, Any]:
+    return {"status": "deprecated", "message": "请使用 /api/report/generate 接口"}
 
 
 @app.get("/{full_path:path}", include_in_schema=False)
