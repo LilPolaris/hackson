@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { MessageSquare, Search, ScrollText, SplitSquareHorizontal, WandSparkles } from "lucide-react";
+import RagPanel from "./RagPanel.jsx";
 
 const tabs = [
   { id: "merge", label: "合并", icon: SplitSquareHorizontal },
@@ -79,18 +80,24 @@ function RightTabs({ data, onRunAction, isLoading, selectedNode }) {
           </span>
           <span className={isLoading ? "run-state loading" : "run-state"}>{isLoading ? "运行中" : "待运行"}</span>
         </header>
-        <pre>{formatPanelValue(data[activeTab])}</pre>
+        {activeTab === "rag" ? (
+          <RagPanel />
+        ) : (
+          <pre>{formatPanelValue(data[activeTab])}</pre>
+        )}
       </section>
 
-      <button
-        className="button dark-button run-button"
-        type="button"
-        onClick={() => onRunAction(activeTab)}
-        disabled={isLoading}
-      >
-        <WandSparkles size={16} />
-        运行当前 Agent
-      </button>
+      {activeTab !== "rag" && (
+        <button
+          className="button dark-button run-button"
+          type="button"
+          onClick={() => onRunAction(activeTab)}
+          disabled={isLoading}
+        >
+          <WandSparkles size={16} />
+          运行当前 Agent
+        </button>
+      )}
     </aside>
   );
 }

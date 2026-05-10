@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from threading import Lock
 
@@ -56,7 +57,11 @@ _BUILTIN_CLASSES = {
     "custom": CustomProvider,
 }
 
-_state: dict = {"active": "qwen", "providers": {}}
+def _default_active_provider() -> str:
+    return os.getenv("LLM_ACTIVE_PROVIDER", "qwen").strip() or "qwen"
+
+
+_state: dict = {"active": _default_active_provider(), "providers": {}}
 _instances: dict[str, BaseLLMProvider] = {}
 
 _CONFIG_FIELDS = {"api_key", "base_url", "model", "display_name", "notes"}
@@ -65,13 +70,14 @@ _CONFIG_FIELDS = {"api_key", "base_url", "model", "display_name", "notes"}
 def _load_state() -> None:
     global _state
     if not _CONFIG_PATH.exists():
+        _state = {"active": _default_active_provider(), "providers": {}}
         return
     try:
         loaded = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
     except Exception:
         return
     if isinstance(loaded, dict):
-        _state = {"active": loaded.get("active", "qwen"), "providers": loaded.get("providers", {})}
+        _state = {"active": loaded.get("active", _default_active_provider()), "providers": loaded.get("providers", {})}
 
 
 def _save_state() -> None:

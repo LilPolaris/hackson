@@ -1,8 +1,14 @@
+const SAME_ORIGIN_API_URL =
+  typeof window !== "undefined" && !["5173", "4173"].includes(window.location.port)
+    ? window.location.origin
+    : "";
+
 const API_BASE_URLS = Array.from(
   new Set([
+    import.meta.env.VITE_API_BASE_URL,
+    SAME_ORIGIN_API_URL,
     "http://127.0.0.1:8002",
     "http://127.0.0.1:8001",
-    import.meta.env.VITE_API_BASE_URL,
     "http://127.0.0.1:8000",
   ].filter(Boolean)),
 );
@@ -11,7 +17,7 @@ function endpointNeedsFallback(path, response, payload) {
   if (response && response.status === 404 && path.startsWith("/api/llm/")) {
     return true;
   }
-  if (path.startsWith("/api/graph/build/")) {
+  if (path.startsWith("/api/graph/build/") && !path.endsWith("/status")) {
     return (
       payload?.success === false ||
       (payload?.status === "mock" && /parsed JSON not found|未找到 parsed JSON/.test(payload?.error || ""))
@@ -133,6 +139,10 @@ export function buildGraphV2(textbookId) {
   });
 }
 
+export function getGraphBuildStatus(textbookId) {
+  return request(`/api/graph/build/${encodeURIComponent(textbookId)}/status`);
+}
+
 export function listLLMProviders() {
   return request("/api/llm/providers");
 }
@@ -170,6 +180,24 @@ export function ragQuery(query) {
     method: "POST",
     body: JSON.stringify({ query, top_k: 5 }),
   });
+}
+
+export function buildRagIndex(textbookIds) {
+  return request("/api/rag/index", {
+    method: "POST",
+    body: JSON.stringify({ textbook_ids: textbookIds }),
+  });
+}
+
+export function ragQueryV2(query, topK = 5) {
+  return request("/api/rag/query", {
+    method: "POST",
+    body: JSON.stringify({ query, top_k: topK }),
+  });
+}
+
+export function getRagStatus() {
+  return request("/api/rag/status");
 }
 
 export function chat(message, history = []) {

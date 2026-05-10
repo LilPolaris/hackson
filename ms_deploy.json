@@ -1,0 +1,20 @@
+{
+  "$schema": "https://modelscope.cn/api/v1/studios/deploy_schema.json",
+  "sdk_type": "docker",
+  "resource_configuration": "platform/2v-cpu-16g-mem",
+  "port": 7860,
+  "environment_variables": [
+    {
+      "name": "PORT",
+      "value": "7860"
+    },
+    {
+      "name": "LLM_ACTIVE_PROVIDER",
+      "value": "deepseek"
+    },
+    {
+      "name": "GRAPH_BUILD_MAX_CHAPTERS",
+      "value": "24"
+    }
+  ]
+}

@@ -4,9 +4,13 @@ services:
   app:
     build: .
     ports:
-      - "8000:8000"
+      - "8000:7860"
     environment:
+      - PORT=7860
+      - LLM_ACTIVE_PROVIDER=${LLM_ACTIVE_PROVIDER}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - MODEL_NAME=${MODEL_NAME}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL}
       - CHUNK_SIZE=${CHUNK_SIZE}

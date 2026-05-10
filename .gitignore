@@ -30,6 +30,9 @@ git_push_only.bat
 github_push_web.bat
 push_to_github.bat
 
+# Git patches（临时产物）
+patches/
+
 # 数据目录（保留结构，忽略内容）
 backend/data/uploads/*
 !backend/data/uploads/.gitkeep
@@ -37,6 +40,8 @@ backend/data/parsed/*
 !backend/data/parsed/.gitkeep
 backend/data/graphs/*
 !backend/data/graphs/.gitkeep
+backend/data/rag_index/*
+!backend/data/rag_index/.gitkeep
 backend/data/vectors/*
 !backend/data/vectors/.gitkeep
 backend/data/*.json

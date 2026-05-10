@@ -1,5 +1,8 @@
 import json
+import os
 import re
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +12,9 @@ from .llm.base import BaseLLMProvider
 
 _PARSED_DIR = Path(__file__).resolve().parent.parent / "data" / "parsed"
 _RELATION_TYPES = {"prerequisite", "parallel", "contains", "applies_to"}
+_BUILD_STATUS: dict[str, dict[str, Any]] = {}
+_BUILD_STATUS_LOCK = threading.Lock()
+_DEFAULT_MAX_CHAPTERS = 24
 
 SYSTEM_PROMPT = """你是一位教材知识点抽取专家。
 你的任务：从给定的一章教材正文中，抽取知识点节点和节点之间的关系，用于构建知识图谱。
@@ -221,6 +227,67 @@ def _load_parsed(textbook_id: str) -> dict[str, Any] | None:
     return json.loads(parsed_file.read_text(encoding="utf-8"))
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _chapter_limit() -> int:
+    raw = os.getenv("GRAPH_BUILD_MAX_CHAPTERS", str(_DEFAULT_MAX_CHAPTERS)).strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return _DEFAULT_MAX_CHAPTERS
+
+
+def _set_build_status(textbook_id: str, **patch: Any) -> dict[str, Any]:
+    now = _utc_now()
+    with _BUILD_STATUS_LOCK:
+        current = {
+            "textbook_id": textbook_id,
+            "status": "idle",
+            "current": 0,
+            "total": 0,
+            "message": "等待构建",
+            **_BUILD_STATUS.get(textbook_id, {}),
+        }
+        if patch.get("status") == "running" and current.get("status") != "running":
+            patch.setdefault("started_at", now)
+        updated = {**current, **patch, "updated_at": now}
+        _BUILD_STATUS[textbook_id] = updated
+        return dict(updated)
+
+
+def get_build_status(textbook_id: str) -> dict[str, Any]:
+    with _BUILD_STATUS_LOCK:
+        status = _BUILD_STATUS.get(textbook_id)
+        if status:
+            return dict(status)
+
+    cached = graph_store.load_graph(textbook_id)
+    if cached is not None:
+        is_built = cached.get("status") == "built"
+        return {
+            "textbook_id": textbook_id,
+            "status": cached.get("status") or "empty",
+            "current": 1,
+            "total": 1,
+            "message": "图谱已构建" if is_built else "已生成演示图谱",
+            "provider": cached.get("provider"),
+            "model": cached.get("model"),
+            "built_at": cached.get("built_at"),
+        }
+
+    parsed = _load_parsed(textbook_id)
+    chapter_count = len(parsed.get("chapters", [])) if parsed else 0
+    return {
+        "textbook_id": textbook_id,
+        "status": "parsed" if chapter_count else "idle",
+        "current": 0,
+        "total": chapter_count,
+        "message": "已解析，等待构建" if chapter_count else "等待解析",
+    }
+
+
 def _save_mock(textbook_id: str, source_textbook: str, error: str) -> dict[str, Any]:
     graph = _mock_graph(source_textbook)
     graph_store.save_graph(
@@ -230,6 +297,14 @@ def _save_mock(textbook_id: str, source_textbook: str, error: str) -> dict[str, 
         provider=None,
         model=None,
         source_textbook=source_textbook,
+    )
+    _set_build_status(
+        textbook_id,
+        status="mock",
+        message="LLM 调用失败，已生成演示图谱",
+        error=error,
+        provider=None,
+        model=None,
     )
     return {
         "textbook_id": textbook_id,
@@ -247,18 +322,74 @@ def build_graph(payload: dict[str, Any]) -> dict[str, Any]:
     source_textbook = (parsed or {}).get("title") or textbook_id
 
     if not parsed or not parsed.get("chapters"):
+        _set_build_status(
+            textbook_id,
+            status="mock",
+            current=0,
+            total=0,
+            message="未找到解析结果，已生成演示图谱",
+            error="parsed JSON not found",
+        )
         return _save_mock(textbook_id, source_textbook, "parsed JSON not found")
+
+    chapters = [chapter for chapter in parsed.get("chapters", []) if (chapter.get("content") or "").strip()]
+    full_total = len(chapters)
+    if full_total == 0:
+        _set_build_status(
+            textbook_id,
+            status="mock",
+            current=0,
+            total=0,
+            message="解析结果没有可抽取正文，已生成演示图谱",
+            error="parsed chapters are empty",
+        )
+        return _save_mock(textbook_id, source_textbook, "parsed chapters are empty")
+
+    limit = _chapter_limit()
+    selected_chapters = chapters[:limit] if limit and full_total > limit else chapters
+    selected_total = len(selected_chapters)
+    is_limited = selected_total < full_total
+    _set_build_status(
+        textbook_id,
+        status="running",
+        current=0,
+        total=selected_total,
+        total_chapters=full_total,
+        limit=limit or None,
+        limited=is_limited,
+        message=f"准备抽取知识点：0/{selected_total}",
+        error=None,
+    )
 
     try:
         provider = get_active_provider()
         all_nodes: list[dict[str, Any]] = []
         all_edges: list[dict[str, Any]] = []
         id_offset = 0
-        for chapter in parsed["chapters"]:
+        for index, chapter in enumerate(selected_chapters, start=1):
+            chapter_title = chapter.get("title") or f"片段 {index}"
+            _set_build_status(
+                textbook_id,
+                status="running",
+                current=index - 1,
+                total=selected_total,
+                message=f"正在抽取 {index}/{selected_total}：{chapter_title}",
+                provider=provider.key,
+                model=getattr(provider, "model", None),
+            )
             sub_graph = _extract_from_chapter(provider, source_textbook, chapter, id_offset)
             all_nodes.extend(sub_graph["nodes"])
             all_edges.extend(sub_graph["edges"])
             id_offset += len(sub_graph["nodes"])
+            _set_build_status(
+                textbook_id,
+                status="running",
+                current=index,
+                total=selected_total,
+                message=f"已完成 {index}/{selected_total}：{chapter_title}",
+                node_count=len(all_nodes),
+                edge_count=len(all_edges),
+            )
 
         if not all_nodes:
             raise ValueError("LLM 未抽取到任何节点")
@@ -273,15 +404,44 @@ def build_graph(payload: dict[str, Any]) -> dict[str, Any]:
             model=model,
             source_textbook=source_textbook,
         )
+        _set_build_status(
+            textbook_id,
+            status="built",
+            current=selected_total,
+            total=selected_total,
+            total_chapters=full_total,
+            limit=limit or None,
+            limited=is_limited,
+            message="图谱已构建" if not is_limited else f"已按上限处理 {selected_total}/{full_total} 个片段",
+            node_count=len(all_nodes),
+            edge_count=len(all_edges),
+            provider=provider.key,
+            model=model,
+            error=None,
+        )
         return {
             "textbook_id": textbook_id,
             "status": "built",
             "provider": provider.key,
             "model": model,
             "error": None,
+            "processed_chapters": selected_total,
+            "total_chapters": full_total,
+            "limited": is_limited,
             "graph": graph,
         }
     except Exception as exc:
+        _set_build_status(
+            textbook_id,
+            status="mock",
+            current=0,
+            total=selected_total,
+            total_chapters=full_total,
+            limit=limit or None,
+            limited=is_limited,
+            message="LLM 调用失败，已生成演示图谱",
+            error=str(exc),
+        )
         return _save_mock(textbook_id, source_textbook, str(exc))
 
 

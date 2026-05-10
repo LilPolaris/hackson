@@ -4,6 +4,8 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .services import chat, graph_builder, graph_store, merger, parser, rag, report
@@ -17,6 +19,7 @@ APP_NAME = "AI Fullstack Hackathon API"
 DATA_DIR = Path(__file__).resolve().parent / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 PARSED_DIR = DATA_DIR / "parsed"
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 graph_store.init_db()
 
@@ -33,6 +36,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if (FRONTEND_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
 
 class TextbookRequest(BaseModel):
@@ -65,7 +71,10 @@ class LLMConfigRequest(BaseModel):
 
 
 @app.get("/")
-def root() -> dict[str, str]:
+def root() -> Any:
+    index_file = FRONTEND_DIST / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
     return {"name": APP_NAME, "status": "running"}
 
 
@@ -206,6 +215,11 @@ def build_graph_api(textbook_id: str) -> dict[str, Any]:
     return graph_builder.build_graph({"textbook_id": textbook_id})
 
 
+@app.get("/api/graph/build/{textbook_id}/status")
+def get_graph_build_status_api(textbook_id: str) -> dict[str, Any]:
+    return graph_builder.get_build_status(textbook_id)
+
+
 @app.get("/api/graph/{textbook_id}")
 def get_graph_api(textbook_id: str) -> dict[str, Any]:
     return graph_builder.get_graph(textbook_id)
@@ -274,9 +288,31 @@ def get_merge_result(merge_id: str) -> dict[str, Any]:
     return result
 
 
+@app.post("/api/rag/index")
+def build_rag_index_api(request: dict) -> dict[str, Any]:
+    """构建 RAG 索引"""
+    textbook_ids = request.get("textbook_ids", [])
+    if not textbook_ids:
+        raise HTTPException(status_code=400, detail="Missing textbook_ids")
+    return rag.build_index(textbook_ids)
+
+
+@app.post("/api/rag/query")
+def rag_query_api(request: RagRequest) -> dict[str, Any]:
+    """RAG 问答"""
+    return rag.query_rag(request.query, request.top_k)
+
+
+@app.get("/api/rag/status")
+def rag_status_api() -> dict[str, Any]:
+    """RAG 索引状态"""
+    return rag.get_rag_status()
+
+
 @app.post("/rag")
 def rag_query(request: RagRequest) -> dict[str, Any]:
-    return rag.retrieve(request.query, request.top_k)
+    """旧版 RAG 接口（兼容性保留）"""
+    return rag.query_rag(request.query, request.top_k)
 
 
 @app.post("/chat")
@@ -287,3 +323,32 @@ def chat_with_agent(request: ChatRequest) -> dict[str, Any]:
 @app.post("/report")
 def generate_report(request: ReportRequest) -> dict[str, Any]:
     return report.generate_report(request.topic, request.textbook_ids)
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def serve_frontend(full_path: str) -> Any:
+    api_prefixes = (
+        "api/",
+        "docs",
+        "openapi.json",
+        "health",
+        "llm/",
+        "graph",
+        "upload",
+        "parse",
+        "merge",
+        "rag",
+        "chat",
+        "report",
+    )
+    if full_path.startswith(api_prefixes):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    target = FRONTEND_DIST / full_path
+    if target.is_file() and _safe_child(target, FRONTEND_DIST):
+        return FileResponse(target)
+
+    index_file = FRONTEND_DIST / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+    raise HTTPException(status_code=404, detail="Frontend build not found")

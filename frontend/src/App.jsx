@@ -8,6 +8,7 @@ import {
   fetchLLMModels,
   generateReport,
   getGraphV2,
+  getGraphBuildStatus,
   listLLMProviders,
   listTextbooks,
   mergeTextbooks,
@@ -346,11 +347,22 @@ function draftFromRegistry(registry, activeKey) {
   };
 }
 
+function formatGraphBuildStatus(status) {
+  if (!status) {
+    return "";
+  }
+  const current = Number.isFinite(Number(status.current)) ? Number(status.current) : 0;
+  const total = Number.isFinite(Number(status.total)) ? Number(status.total) : 0;
+  const prefix = total > 0 ? `${current}/${total}` : "";
+  return [prefix, status.message].filter(Boolean).join(" · ");
+}
+
 function App() {
   const [textbooks, setTextbooks] = useState([]);
   const [activeTextbookId, setActiveTextbookId] = useState(null);
   const [graph, setGraph] = useState(EMPTY_GRAPH);
   const [graphMeta, setGraphMeta] = useState({ status: "empty", provider: null, model: null, error: null });
+  const [graphBuildStatus, setGraphBuildStatus] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [panelData, setPanelData] = useState({
     parse: "等待上传教材",
@@ -417,6 +429,7 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    setGraphBuildStatus(null);
     getGraphV2(graphTextbookId)
       .then((data) => {
         if (cancelled) {
@@ -546,9 +559,37 @@ function App() {
 
     setIsLoading(true);
     setNotice("");
+    let graphPoller = null;
     try {
       if (action === "graph") {
-        const data = await buildGraphV2(graphTextbookId);
+        const pollGraphBuildStatus = async () => {
+          try {
+            const status = await getGraphBuildStatus(graphTextbookId);
+            setGraphBuildStatus(status);
+            if (status.status === "running") {
+              setNotice(formatGraphBuildStatus(status));
+            }
+          } catch {
+            // Polling is only for visibility; the build request below owns errors.
+          }
+        };
+
+        setGraphBuildStatus({ status: "running", current: 0, total: 0, message: "已提交图谱构建请求" });
+        setNotice("正在构建图谱...");
+        const buildPromise = buildGraphV2(graphTextbookId);
+        graphPoller = window.setInterval(pollGraphBuildStatus, 1500);
+        await pollGraphBuildStatus();
+
+        const data = await buildPromise;
+        if (graphPoller) {
+          window.clearInterval(graphPoller);
+          graphPoller = null;
+        }
+        try {
+          setGraphBuildStatus(await getGraphBuildStatus(graphTextbookId));
+        } catch {
+          setGraphBuildStatus(null);
+        }
         setGraph(data.graph || EMPTY_GRAPH);
         setGraphMeta({
           status: data.status || "empty",
@@ -561,6 +602,13 @@ function App() {
           setNotice(`LLM 调用不可用，已显示演示图谱：${data.error || "fallback"}`);
         } else if (data.error) {
           setNotice(data.error);
+        }
+        if (data.status !== "mock" && !data.error) {
+          setNotice(
+            data.limited
+              ? `图谱已构建：已处理 ${data.processed_chapters}/${data.total_chapters} 个片段，可通过 GRAPH_BUILD_MAX_CHAPTERS 调整上限`
+              : "图谱构建完成",
+          );
         }
       }
 
@@ -586,6 +634,9 @@ function App() {
     } catch (error) {
       setNotice(error.message || "操作失败");
     } finally {
+      if (graphPoller) {
+        window.clearInterval(graphPoller);
+      }
       setIsLoading(false);
     }
   }
@@ -688,6 +739,13 @@ function App() {
       : graphMeta.status === "mock"
         ? "演示数据"
         : "待构建";
+
+  const graphBuildStatusText = formatGraphBuildStatus(graphBuildStatus);
+  const graphBuildProgress =
+    graphBuildStatus?.total > 0
+      ? Math.max(0, Math.min(100, Math.round((graphBuildStatus.current / graphBuildStatus.total) * 100)))
+      : 0;
+  const isGraphBuilding = graphBuildStatus?.status === "running" || (isLoading && notice.includes("构建"));
 
   return (
     <div className="app-root">
@@ -920,12 +978,17 @@ function App() {
               <h1>{activeTextbook?.filename || "教材工作台"}</h1>
             </div>
             <button
-              className="button dark-button"
+              className="button dark-button graph-build-button"
               type="button"
               onClick={() => runAction("graph")}
               disabled={isLoading}
             >
               <Network size={16} />
+              <span className="button-label">
+                {isGraphBuilding && graphBuildStatus?.total
+                  ? `构建中 ${graphBuildStatus.current}/${graphBuildStatus.total}`
+                  : "构建图谱"}
+              </span>
               构建图谱
             </button>
           </header>
@@ -946,6 +1009,20 @@ function App() {
               </strong>
             </article>
           </div>
+
+          {graphBuildStatusText && (
+            <div className={isGraphBuilding ? "build-status-card running" : "build-status-card"}>
+              <div>
+                <span>{graphBuildStatus?.status || "idle"}</span>
+                <strong>{graphBuildStatusText}</strong>
+              </div>
+              {graphBuildStatus?.total > 0 && (
+                <div className="build-progress" aria-hidden="true">
+                  <span style={{ width: `${graphBuildProgress}%` }} />
+                </div>
+              )}
+            </div>
+          )}
 
           <KnowledgeGraph graph={graph} onNodeClick={setSelectedNode} />
 
