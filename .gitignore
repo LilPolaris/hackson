@@ -11,3 +11,33 @@ __pycache__/
 dist/
 build/
 .DS_Store
+*.log
+*.err.log
+tmp/
+
+# Claude 内部文件
+.claude/
+
+# 内部任务文档（不公开）
+TASK_*.md
+AI_COMPETITION_PREP.md
+
+# 赛题 PDF（版权 / 非项目代码）
+第一届AI全栈黑客松赛题*.pdf
+
+# 临时脚本
+git_push_only.bat
+github_push_web.bat
+push_to_github.bat
+
+# 数据目录（保留结构，忽略内容）
+backend/data/uploads/*
+!backend/data/uploads/.gitkeep
+backend/data/parsed/*
+!backend/data/parsed/.gitkeep
+backend/data/graphs/*
+!backend/data/graphs/.gitkeep
+backend/data/vectors/*
+!backend/data/vectors/.gitkeep
+backend/data/*.json
+backend/data/*.db
