@@ -2,6 +2,11 @@
 title: 学科知识整合智能体
 sdk: docker
 app_port: 7860
+license: mit
+tags:
+  - knowledge-graph
+  - rag
+  - education
 ---
 
 # 学科知识整合智能体
